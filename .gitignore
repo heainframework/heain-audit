@@ -1,0 +1,7 @@
+/data/
+*.db
+node
+heain-audit
+.venv/
+__pycache__/
+*.pyc
