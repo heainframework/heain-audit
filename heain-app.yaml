@@ -1,0 +1,37 @@
+# heain-audit v2 (Step 4c-2, 2026-10-06): the independent auditor base app on heain-sdk v1.
+# Reads its node's audit chain (core policy audit.readers must list heain-audit), verifies
+# it itself, keeps a sealed replica, signs Merkle checkpoints, detects rewrites, and scores
+# anomalies with an Isolation Forest (advisory: findings go to an Approver through P5).
+manifest_version: 1
+app:
+  id: heain-audit
+  version: 2.0.0
+  group: base
+  description: Independent auditor -- verified replica of the node's audit chain, signed checkpoints, anomaly review.
+  api: v1
+  sdk: {name: heain-sdk-go, version: ">=1.0.0"}
+capabilities:
+  - {name: audit.status, version: 1, formal: false, execution: direct, ai: {used: false}}
+  - {name: audit.query, version: 1, formal: true, execution: direct, ai: {used: false}, data_classes: [audit_replica]}
+  - {name: audit.checkpoint, version: 1, formal: true, execution: direct, ai: {used: false}, data_classes: [audit_replica]}
+  - {name: audit.verify, version: 1, formal: true, execution: direct, ai: {used: false}, data_classes: [audit_replica]}
+  - name: audit.anomaly
+    version: 1
+    formal: true
+    execution: direct
+    ai: {used: true, model: {name: isolation-forest, version: "1"}, reasoning_record: required}
+    data_classes: [audit_replica]
+endpoints:
+  - {method: GET, path: /v1/status, capability: audit.status, formal: false}
+  - {method: GET, path: /v1/records, capability: audit.query, formal: true}
+  - {method: GET, path: /v1/anomalies, capability: audit.query, formal: true}
+  - {method: GET, path: /v1/alerts, capability: audit.query, formal: true}
+  - {method: POST, path: /v1/checkpoints, capability: audit.checkpoint, formal: true}
+  - {method: GET, path: /v1/checkpoints, capability: audit.checkpoint, formal: true}
+  - {method: GET, path: "/v1/checkpoints/{id}/verify", capability: audit.verify, formal: true}
+  - {method: POST, path: /v1/anomaly/scan, capability: audit.anomaly, formal: true}
+data_classes:
+  - {name: audit_replica, sovereignty: node-local, encrypted_at_rest: true}
+offline:
+  allowed: [audit.status, audit.query, audit.checkpoint, audit.verify, audit.anomaly]
+  journal: none

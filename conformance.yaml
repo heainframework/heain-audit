@@ -1,0 +1,15 @@
+# heain-audit under the heain conformance suite (heain-sdk conformance/). The harness does
+# not list heain-audit in core's audit.readers policy, so the auditor runs with an empty
+# replica here; the live test scripts/live_4c.sh exercises reading, checkpoints, divergence
+# and anomaly review against a real core.
+manifest: heain-app.yaml
+build: [go, build, -o, heain-audit, ./cmd/heain-audit]
+start: [./heain-audit, -pull-every, 2s]
+port: 19470
+endpoints:
+  - {method: GET, path: /v1/status, expect: 200}
+  - {method: GET, path: "/v1/records?actor=conformance-secret-actor", expect: 200, secret: conformance-secret-actor}
+  - {method: POST, path: /v1/anomaly/scan, body: {}, expect: 200}
+  - {method: GET, path: /v1/anomalies, expect: 200}
+  - {method: GET, path: /v1/alerts, expect: 200}
+  - {method: GET, path: /v1/checkpoints, expect: 200}
