@@ -44,6 +44,13 @@ type Params struct {
 	Threshold       float64 // anomaly score at or above which an event is flagged
 	Trees, Sample   int
 	Context         int // earlier events fitted with the window, for context
+	// Stage B-3a, the sequence model: an event is flagged when its
+	// surprisal for its actor reaches SeqThresholdBits; the model learns
+	// from up to SeqHistory events before the window and scores nothing
+	// until it has SeqMinHistory of them (0 = defaults 12 bits, 20000, 1000).
+	SeqThresholdBits float64
+	SeqHistory       int
+	SeqMinHistory    int
 }
 
 // Status is GET /v1/status.
@@ -81,6 +88,7 @@ const (
 	TypeDivergence    = "audit.divergence"
 	TypeAnomalyReview = "audit.anomaly_review"
 	ModelName         = "isolation-forest"
+	SeqModelName      = "trigram-witten-bell"
 )
 
 // ErrNothingNew: no record since the last checkpoint.
@@ -335,6 +343,7 @@ type Scan struct {
 	RecordID  string         `json:"record_id"`
 	ActionID  string         `json:"action_id,omitempty"`
 	Threshold float64        `json:"threshold"`
+	Sequence  *SeqScan       `json:"sequence,omitempty"`
 }
 
 // ScanNow scores the records not scored yet (ctx carries the request's
@@ -421,7 +430,28 @@ func (a *Auditor) scan(ctx context.Context) (Scan, error) {
 			}
 		}
 	}
-	sort.Slice(sc.Flagged, func(i, j int) bool { return sc.Flagged[i].Score > sc.Flagged[j].Score })
+	ss, err := a.sequence(ctx, es, sc.From, sc.To)
+	if err != nil {
+		return sc, err
+	}
+	sc.Sequence = ss
+	if ss != nil {
+		at := map[uint64]int{}
+		for i := range sc.Flagged {
+			sc.Flagged[i].Kind = "isolation_forest"
+			at[sc.Flagged[i].Seq] = i
+		}
+		for _, f := range ss.flags {
+			if i, ok := at[f.Seq]; ok {
+				sc.Flagged[i].Kind, sc.Flagged[i].Surprisal, sc.Flagged[i].Expected = "both", f.Surprisal, f.Expected
+				sc.Flagged[i].SeqRecord = ss.RecordID
+				continue
+			}
+			f.SeqRecord = ss.RecordID
+			sc.Flagged = append(sc.Flagged, f)
+		}
+	}
+	sort.Slice(sc.Flagged, func(i, j int) bool { return review(sc.Flagged[i], a.P) > review(sc.Flagged[j], a.P) })
 	decision := fmt.Sprintf("flagged %d of %d events in %d-%d", len(sc.Flagged), sc.Scored, sc.From, sc.To)
 	summary := "Isolation Forest over gap, action/actor rarity, hour and failure; events at or above the threshold are flagged for an Approver (advisory)."
 	if len(es) < 8 {
@@ -450,7 +480,11 @@ func (a *Auditor) scan(ctx context.Context) (Scan, error) {
 				seqs = append(seqs, f.Seq)
 			}
 		}
-		res, err := a.Core.Propose(ctx, heain.Proposal{Type: TypeAnomalyReview, Category: heain.CategoryThreshold, Value: sc.MaxScore,
+		value := 0.0
+		for _, f := range sc.Flagged {
+			value = math.Max(value, review(f, a.P))
+		}
+		res, err := a.Core.Propose(ctx, heain.Proposal{Type: TypeAnomalyReview, Category: heain.CategoryThreshold, Value: value,
 			Data: map[string]any{"node": a.P.Node, "from": sc.From, "to": sc.To, "flagged": len(sc.Flagged), "seqs": seqs, "record_id": rid}})
 		if err == nil {
 			sc.ActionID = res.ActionID

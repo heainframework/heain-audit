@@ -5,10 +5,13 @@
 # 2.1 (Stage B-1d, 2026-10-08): sends its signed checkpoints (roots only) to the heain-audit of its
 # zone Master, which witnesses them and detects a rewritten or wiped chain; anchors the checkpoints it
 # holds with an RFC 3161 time-stamp authority (only a SHA-256 root leaves the deployment).
+# 2.2 (Stage B-3a, 2026-10-08): a sequence model beside the Isolation Forest -- a trigram model of each
+# actor's event stream (Witten-Bell), learned from the history before each window; an event surprising
+# for its actor after its two previous events is flagged to the same P5 review (advisory).
 manifest_version: 1
 app:
   id: heain-audit
-  version: 2.1.0
+  version: 2.2.0
   group: base
   description: Independent auditor -- verified replica of the node's audit chain, signed checkpoints, anomaly review.
   api: v1
@@ -24,6 +27,12 @@ capabilities:
     execution: direct
     ai: {used: true, model: {name: isolation-forest, version: "1"}, reasoning_record: required}
     data_classes: [audit_replica]
+  - name: audit.sequence
+    version: 1
+    formal: true
+    execution: direct
+    ai: {used: true, model: {name: trigram-witten-bell, version: "1"}, reasoning_record: required}
+    data_classes: [audit_replica]
   - {name: audit.witness, version: 1, formal: true, execution: direct, ai: {used: false}, data_classes: [checkpoint_root]}
   - {name: audit.anchor, version: 1, formal: true, execution: direct, ai: {used: false}, data_classes: [checkpoint_root]}
 endpoints:
@@ -35,6 +44,8 @@ endpoints:
   - {method: GET, path: /v1/checkpoints, capability: audit.checkpoint, formal: true}
   - {method: GET, path: "/v1/checkpoints/{id}/verify", capability: audit.verify, formal: true}
   - {method: POST, path: /v1/anomaly/scan, capability: audit.anomaly, formal: true}
+  - {method: GET, path: /v1/sequence, capability: audit.query, formal: true}
+  - {method: POST, path: /v1/sequence/scan, capability: audit.sequence, formal: true}
   - {method: POST, path: /v1/witness/checkpoints, capability: audit.witness, formal: true}
   - {method: GET, path: /v1/witness/checkpoints, capability: audit.witness, formal: true}
   - {method: POST, path: /v1/anchors, capability: audit.anchor, formal: true}
@@ -47,5 +58,5 @@ data_classes:
   - {name: audit_replica, sovereignty: node-local, encrypted_at_rest: true}
   - {name: checkpoint_root, sovereignty: zone-local, encrypted_at_rest: true}
 offline:
-  allowed: [audit.status, audit.query, audit.checkpoint, audit.verify, audit.anomaly, audit.witness, audit.anchor]
+  allowed: [audit.status, audit.query, audit.checkpoint, audit.verify, audit.anomaly, audit.sequence, audit.witness, audit.anchor]
   journal: none

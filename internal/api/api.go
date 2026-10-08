@@ -37,6 +37,8 @@ func (a *API) Register(s *heain.Server) error {
 		"GET /v1/checkpoints":             a.checkpoints,
 		"GET /v1/checkpoints/{id}/verify": a.verify,
 		"POST /v1/anomaly/scan":           a.scan,
+		"GET /v1/sequence":                a.sequence,
+		"POST /v1/sequence/scan":          a.scan, // the same scan: both models, each with its record
 		"POST /v1/witness/checkpoints":    a.witness,
 		"GET /v1/witness/checkpoints":     a.witnessed,
 		"POST /v1/anchors":                a.anchorNow,
@@ -52,6 +54,11 @@ func (a *API) Register(s *heain.Server) error {
 }
 
 func (a *API) status(w http.ResponseWriter, r *http.Request) { reply(w, http.StatusOK, a.A.Status()) }
+
+// sequence describes the sequence model (Stage B-3a).
+func (a *API) sequence(w http.ResponseWriter, r *http.Request) {
+	reply(w, http.StatusOK, a.A.SequenceInfo())
+}
 
 func (a *API) records(w http.ResponseWriter, r *http.Request) {
 	q := r.URL.Query()

@@ -34,6 +34,9 @@ func main() {
 	trees := flag.Int("trees", 100, "isolation forest: trees")
 	sample := flag.Int("sample", 256, "isolation forest: sub-sample per tree")
 	ctxN := flag.Int("context", 500, "earlier events fitted with each window, for context")
+	seqBits := flag.Float64("sequence-threshold-bits", 12, "sequence model: surprisal (bits) at or above which an event is flagged")
+	seqHist := flag.Int("sequence-history", 20000, "sequence model: events of history it learns from before each window")
+	seqMin := flag.Int("sequence-min-history", 1000, "sequence model: history needed before it scores anything")
 	tsaURL := flag.String("tsa-url", os.Getenv("HEAIN_AUDIT_TSA_URL"), "RFC 3161 time-stamp authority that anchors the checkpoints held here (empty = no anchoring); only a SHA-256 root is sent")
 	tsaCA := flag.String("tsa-ca", os.Getenv("HEAIN_AUDIT_TSA_CA"), "the TSA's CA certificate(s) (PEM), to verify its tokens")
 	anchorEvery := flag.Duration("anchor-every", 10*time.Minute, "anchor what is new this often (with -tsa-url)")
@@ -64,7 +67,8 @@ func main() {
 	}
 	defer st.Close()
 	a := &auditor.Auditor{Core: app, Store: st, Logf: log.Printf, P: auditor.Params{Node: os.Getenv("HEAIN_CORE_ID"),
-		CheckpointEvery: *ckpt, ScanEvery: *scan, Threshold: *thr, Trees: *trees, Sample: *sample, Context: *ctxN}}
+		CheckpointEvery: *ckpt, ScanEvery: *scan, Threshold: *thr, Trees: *trees, Sample: *sample, Context: *ctxN,
+		SeqThresholdBits: *seqBits, SeqHistory: *seqHist, SeqMinHistory: *seqMin}}
 	if *witness {
 		a.Zone = zone{app}
 	}

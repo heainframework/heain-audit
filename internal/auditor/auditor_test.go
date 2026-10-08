@@ -191,15 +191,91 @@ func TestScanFlagsOutliers(t *testing.T) {
 	if len(f.proposals) != 1 || f.proposals[0].Type != TypeAnomalyReview || f.proposals[0].Value < 0.62 {
 		t.Fatalf("one P5 review: %+v", f.proposals)
 	}
-	if len(f.reasons) != 1 || f.reasons[0].Capability != "audit.anomaly" || f.reasons[0].ModelSHA256 == "" {
-		t.Fatal("a reasoning record per scan")
+	byCap := map[string]heain.Decision{}
+	for _, r := range f.reasons {
+		byCap[r.Capability] = r
+	}
+	if len(f.reasons) != 2 || byCap["audit.anomaly"].ModelSHA256 == "" || !strings.HasPrefix(byCap["audit.sequence"].Decision, "not scored: 0 events of history") {
+		t.Fatalf("a reasoning record per model and scan (the sequence model has no history yet): %d records", len(f.reasons))
 	}
 	if fl, _ := a.Store.Flags(); len(fl) != len(sc.Flagged) || fl[0].RecordID == "" {
 		t.Fatal("flags stored with their record")
 	}
 	sc2, _ := a.ScanNow(ctx)
-	if sc2.Scored != 0 || len(f.reasons) != 2 {
-		t.Fatal("nothing new: still a record, nothing scored")
+	if sc2.Scored != 0 || len(f.reasons) != 3 || sc2.Sequence != nil {
+		t.Fatal("nothing new: still the forest's record, nothing scored")
 	}
 	_ = sha256.New
+}
+
+// Stage B-3a: an event every actor does all the time, but out of its usual
+// order, is invisible to the forest and flagged by the sequence model.
+func TestSequenceModelFlagsOutOfOrder(t *testing.T) {
+	a, f := setup(t)
+	ctx := context.Background()
+	base := time.Date(2026, 10, 8, 9, 0, 0, 0, time.UTC)
+	cycle := []string{"app.key_released", "app.event", "app.job_submitted", "app.job_claimed"}
+	n := 0
+	emit := func(actor, action string) {
+		f.add(actor, action, "ok", base.Add(time.Duration(n)*time.Second))
+		n++
+	}
+	for i := 0; i < 400; i++ { // 1600 events of history: each actor follows the cycle
+		for _, act := range cycle {
+			emit([]string{"app.a1", "app.a2"}[i%2], act)
+		}
+	}
+	_ = a.Pull(ctx)
+	if sc, _ := a.ScanNow(ctx); sc.Sequence == nil || sc.Sequence.Scored != 0 || sc.Sequence.Note == "" {
+		t.Fatalf("first scan: no history yet: %+v", sc.Sequence)
+	}
+	for i := 0; i < 10; i++ { // the window: the usual cycle ...
+		for _, act := range cycle {
+			emit("app.a1", act)
+		}
+	}
+	emit("app.a1", "app.key_released")
+	emit("app.a1", "app.job_claimed") // ... and once a claim straight after a key release
+	emit("app.a1", "app.event")
+	_ = a.Pull(ctx)
+	f.proposals = nil
+	sc, err := a.ScanNow(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	ss := sc.Sequence
+	if ss == nil || ss.History != 1600 || ss.Scored != 43 || ss.Vocabulary != 4 || ss.RecordID == "" {
+		t.Fatalf("sequence scan: %+v", ss)
+	}
+	var seq []replicaFlag
+	for _, fl := range sc.Flagged {
+		if fl.Kind == "sequence" || fl.Kind == "both" {
+			seq = append(seq, replicaFlag{fl.Seq, fl.Action, fl.Surprisal, fl.Expected})
+		}
+	}
+	if len(seq) == 0 || seq[0].action != "app.job_claimed" || seq[0].bits < 12 || len(seq[0].expected) == 0 || seq[0].expected[0] != "app.event" {
+		t.Fatalf("the out-of-order claim must lead the sequence findings: %+v", seq)
+	}
+	if len(seq) > 3 {
+		t.Fatalf("few sequence findings expected, got %d: %+v", len(seq), seq)
+	}
+	var last heain.Decision
+	for _, r := range f.reasons {
+		if r.Capability == "audit.sequence" {
+			last = r
+		}
+	}
+	if last.ModelSHA256 == "" || !strings.HasPrefix(last.Decision, "flagged") {
+		t.Fatalf("sequence record: %q", last.Decision)
+	}
+	if len(f.proposals) != 1 || f.proposals[0].Value < 0.5 {
+		t.Fatalf("one P5 review: %+v", f.proposals)
+	}
+}
+
+type replicaFlag struct {
+	seq      uint64
+	action   string
+	bits     float64
+	expected []string
 }

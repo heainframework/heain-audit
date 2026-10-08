@@ -6,6 +6,9 @@
 #  - a signed Merkle checkpoint verifies (root, signature, core);
 #  - an anomaly scan (Isolation Forest, signed reasoning record) flags rare failures and asks an
 #    Approver through P5 (advisory);
+#  - Stage B-3a: the sequence model (a trigram model of each actor's stream, learned from the history
+#    before the window) files its own signed reasoning record with each scan, and scores once it has
+#    enough history (here -sequence-min-history 100);
 #  - when core's chain is replaced (an operator wipes audit.db), heain-audit detects the
 #    divergence, keeps its replica as evidence and raises P5.
 # The app is a plain process configured through HEAIN_* variables.
@@ -37,7 +40,7 @@ startG() { nohup "$BIN" -node-id=G -tier=ZONE -raft-addr=127.0.0.1:19000 -data-d
 run_au() { mkdir -p "$W/state-a1"
   HEAIN_MANIFEST=$AU/heain-app.yaml HEAIN_INSTANCE=a1 HEAIN_CORE_URL=$URL HEAIN_CORE_ID=G HEAIN_CA=$C/ca.pem HEAIN_CHAIN=$W/prov.pem \
   HEAIN_STATE_DIR=$W/state-a1 HEAIN_ENROLL_TOKEN=$W/a1.tok HEAIN_ENDPOINT_BASE=$AURL HEAIN_LISTEN=127.0.0.1:19470 \
-    nohup "$W/heain-audit" -pull-every 2s -checkpoint-every 0 -scan-every 0 >> "$W/a1.log" 2>&1 &
+    nohup "$W/heain-audit" -pull-every 2s -checkpoint-every 0 -scan-every 0 -sequence-min-history 100 >> "$W/a1.log" 2>&1 &
   echo $! > "$P/a1.pid"; }
 pending() { as approver-1 $URL/v1/admin/policy/pending | j "' '.join(x['ID'] for x in d['actions'] if x['Type']=='$1')"; }
 until_ok() { for i in $(seq 1 ${2:-20}); do eval "$1" && return 0; sleep 1; done; return 1; }
@@ -109,6 +112,23 @@ RID=$(echo "$r" | j "d['record_id']"); ACT=$(echo "$r" | j "d.get('action_id',''
 [ "$(coreaudit | j "sum(1 for r in d['records'] if r['event']['Action']=='ai.reasoning_record' and r['event']['Detail']['record']['record_id']=='$RID')")" = 1 ] && ok "a signed reasoning record of the scan is in core's audit" || bad "record"
 [ -n "$ACT" ] && [ "$(as approver-1 $URL/v1/admin/policy/pending | j "[a['Type'] for a in d['actions'] if a['ID']=='$ACT'][0]")" = audit.anomaly_review ] && ok "the Approver is asked to review (P5 audit.anomaly_review); heain-audit acts on nothing itself" || bad "P5 review: $ACT"
 [ "$(au $AURL/v1/anomalies | j "len(d['flags'])")" = "$(echo $FL | wc -w)" ] && ok "flags kept with their record and action" || bad "flags list"
+SR=$(echo "$r" | j "d['sequence']['record_id']")
+[ -n "$SR" ] && [ "$(echo "$r" | j "d['sequence']['scored']")" = 0 ] && [ "$(coreaudit | j "sum(1 for r in d['records'] if r['event']['Action']=='ai.reasoning_record' and r['event']['Detail']['record']['record_id']=='$SR' and r['event']['Detail']['record']['model']['name']=='trigram-witten-bell')")" = 1 ] \
+  && ok "the sequence model filed its own record (trigram-witten-bell): $(echo "$r" | j "d['sequence']['note']")" || bad "sequence record: $(echo "$r" | j "d.get('sequence')")"
+
+echo "== 4b. the sequence model, once it has history (B-3a)"
+for i in $(seq 1 40); do event $((i % 4)) ok; done
+HEAD=$(as admin $URL/v1/admin/audit/verify | j "d['records']")
+until_ok '[ "$(st "d[\"replica_head\"]")" -ge '"$HEAD"' ]' 20
+r=$(au -X POST -d '{}' $AURL/v1/sequence/scan)
+SQ=$(echo "$r" | j "d['sequence']")
+[ "$(echo "$r" | j "d['sequence']['history_events'] >= 100 and d['sequence']['scored'] == d['scored'] and d['sequence']['vocabulary'] > 1")" = True ] \
+  && ok "scored $(echo "$r" | j "d['sequence']['scored']") new events against $(echo "$r" | j "d['sequence']['history_events']") of history ($(echo "$r" | j "d['sequence']['vocabulary']") kinds of event), max surprisal $(echo "$r" | j "d['sequence']['max_surprisal_bits']") bits, $(echo "$r" | j "d['sequence']['flagged']") flagged at $(echo "$r" | j "d['sequence']['threshold_bits']") bits" || bad "sequence scan: $SQ"
+SR=$(echo "$r" | j "d['sequence']['record_id']")
+RH=$(coreaudit "$HEAD" | j "[r['event']['Detail']['record']['model'].get('artifact_sha256') for r in d['records'] if r['event']['Action']=='ai.reasoning_record' and r['event']['Detail']['record']['record_id']=='$SR'][0]")
+GH=$(au $AURL/v1/sequence | j "d['model_sha256']")
+[ -n "$RH" ] && [ "$RH" = "$GH" ] \
+  && ok "its record names the model by the hash GET /v1/sequence reports" || bad "sequence model hash: record [$RH] /v1/sequence [$GH] $(au $AURL/v1/sequence | head -c 300)"
 
 echo "== 5. core's chain replaced: divergence detected, replica kept as evidence"
 RH=$(st "d['replica_head']")

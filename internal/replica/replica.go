@@ -66,9 +66,17 @@ type Flag struct {
 	Action   string             `json:"action"`
 	Actor    string             `json:"actor"`
 	Features map[string]float64 `json:"features"`
-	RecordID string             `json:"record_id"`
-	ActionID string             `json:"action_id,omitempty"`
-	At       time.Time          `json:"at"`
+	// Stage B-3a: which model flagged it (isolation_forest, sequence or
+	// both); for the sequence model, how surprising the event was for its
+	// actor after its two previous events, and what that actor usually does
+	// next.
+	Kind      string    `json:"kind,omitempty"`
+	Surprisal float64   `json:"surprisal_bits,omitempty"`
+	Expected  []string  `json:"expected,omitempty"`
+	RecordID  string    `json:"record_id"`
+	SeqRecord string    `json:"sequence_record_id,omitempty"`
+	ActionID  string    `json:"action_id,omitempty"`
+	At        time.Time `json:"at"`
 }
 
 // Alert is a divergence between core's chain and the replica.

@@ -45,3 +45,14 @@ The author decided (2026-10-08) that each node's heain-audit sends its signed ch
 - **Not yet:** checkpoints do not go past the zone Master to the tier above (the Master's own checkpoints and anchors cover its zone).
 
 Tests: `scripts/live_b1d.sh` (Master + farm Worker, a TEST ONLY TSA).
+
+## Stage B-3a: a sequence model (2.2, 2026-10-08)
+
+The author decided (2026-10-08) to build the sequence model in Go. This closes "a sequence model for anomalies once real audit history exists" in "Not yet" above.
+
+- **The model** is a trigram language model over each actor's event stream, with Witten-Bell interpolation. A token is the action, the capability of an app event, and `:fail` when it failed.
+- **History:** it learns from up to `-sequence-history` (20000) events before each scan window. It scores nothing until it has `-sequence-min-history` (1000) of them.
+- **Flags:** an event whose surprisal for its actor, after that actor's two previous events, reaches `-sequence-threshold-bits` (12) is flagged. The flag carries `surprisal_bits` and the three things that actor usually does next (`expected`). This catches what the Isolation Forest, which scores one event at a time, cannot: a usual action out of its usual order.
+- **Records:** each scan runs both models, and each files its own signed reasoning record: `audit.anomaly` (isolation-forest) and `audit.sequence` (trigram-witten-bell).
+- **Review:** flags show which model raised them (`kind`: isolation_forest, sequence or both), and all go to the same P5 `audit.anomaly_review`. A sequence finding counts 0.5 at the threshold, rising to 1 at twice the threshold.
+- **Endpoints:** `GET /v1/sequence` gives the model, its settings and its hash; `POST /v1/sequence/scan` runs the same scan as `/v1/anomaly/scan`.
