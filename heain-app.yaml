@@ -2,10 +2,13 @@
 # Reads its node's audit chain (core policy audit.readers must list heain-audit), verifies
 # it itself, keeps a sealed replica, signs Merkle checkpoints, detects rewrites, and scores
 # anomalies with an Isolation Forest (advisory: findings go to an Approver through P5).
+# 2.1 (Stage B-1d, 2026-10-08): sends its signed checkpoints (roots only) to the heain-audit of its
+# zone Master, which witnesses them and detects a rewritten or wiped chain; anchors the checkpoints it
+# holds with an RFC 3161 time-stamp authority (only a SHA-256 root leaves the deployment).
 manifest_version: 1
 app:
   id: heain-audit
-  version: 2.0.0
+  version: 2.1.0
   group: base
   description: Independent auditor -- verified replica of the node's audit chain, signed checkpoints, anomaly review.
   api: v1
@@ -21,6 +24,8 @@ capabilities:
     execution: direct
     ai: {used: true, model: {name: isolation-forest, version: "1"}, reasoning_record: required}
     data_classes: [audit_replica]
+  - {name: audit.witness, version: 1, formal: true, execution: direct, ai: {used: false}, data_classes: [checkpoint_root]}
+  - {name: audit.anchor, version: 1, formal: true, execution: direct, ai: {used: false}, data_classes: [checkpoint_root]}
 endpoints:
   - {method: GET, path: /v1/status, capability: audit.status, formal: false}
   - {method: GET, path: /v1/records, capability: audit.query, formal: true}
@@ -30,8 +35,17 @@ endpoints:
   - {method: GET, path: /v1/checkpoints, capability: audit.checkpoint, formal: true}
   - {method: GET, path: "/v1/checkpoints/{id}/verify", capability: audit.verify, formal: true}
   - {method: POST, path: /v1/anomaly/scan, capability: audit.anomaly, formal: true}
+  - {method: POST, path: /v1/witness/checkpoints, capability: audit.witness, formal: true}
+  - {method: GET, path: /v1/witness/checkpoints, capability: audit.witness, formal: true}
+  - {method: POST, path: /v1/anchors, capability: audit.anchor, formal: true}
+  - {method: GET, path: /v1/anchors, capability: audit.anchor, formal: true}
+  - {method: GET, path: "/v1/anchors/{id}/verify", capability: audit.anchor, formal: true}
+  - {method: GET, path: "/v1/anchors/{id}/token", capability: audit.anchor, formal: true}
+uses:
+  - {app: heain-audit, capabilities: [audit.witness]}
 data_classes:
   - {name: audit_replica, sovereignty: node-local, encrypted_at_rest: true}
+  - {name: checkpoint_root, sovereignty: zone-local, encrypted_at_rest: true}
 offline:
-  allowed: [audit.status, audit.query, audit.checkpoint, audit.verify, audit.anomaly]
+  allowed: [audit.status, audit.query, audit.checkpoint, audit.verify, audit.anomaly, audit.witness, audit.anchor]
   journal: none

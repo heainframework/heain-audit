@@ -34,6 +34,10 @@ func main() {
 	trees := flag.Int("trees", 100, "isolation forest: trees")
 	sample := flag.Int("sample", 256, "isolation forest: sub-sample per tree")
 	ctxN := flag.Int("context", 500, "earlier events fitted with each window, for context")
+	tsaURL := flag.String("tsa-url", os.Getenv("HEAIN_AUDIT_TSA_URL"), "RFC 3161 time-stamp authority that anchors the checkpoints held here (empty = no anchoring); only a SHA-256 root is sent")
+	tsaCA := flag.String("tsa-ca", os.Getenv("HEAIN_AUDIT_TSA_CA"), "the TSA's CA certificate(s) (PEM), to verify its tokens")
+	anchorEvery := flag.Duration("anchor-every", 10*time.Minute, "anchor what is new this often (with -tsa-url)")
+	witness := flag.Bool("witness", os.Getenv("HEAIN_AUDIT_WITNESS") != "off", "send this node's checkpoints to the heain-audit of its zone Master (env HEAIN_AUDIT_WITNESS=off to keep them here only)")
 	flag.Parse()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
@@ -61,6 +65,13 @@ func main() {
 	defer st.Close()
 	a := &auditor.Auditor{Core: app, Store: st, Logf: log.Printf, P: auditor.Params{Node: os.Getenv("HEAIN_CORE_ID"),
 		CheckpointEvery: *ckpt, ScanEvery: *scan, Threshold: *thr, Trees: *trees, Sample: *sample, Context: *ctxN}}
+	if *witness {
+		a.Zone = zone{app}
+	}
+	if *tsaURL != "" {
+		a.Anchoring = &auditor.Anchoring{URL: *tsaURL, CAFile: *tsaCA, Every: *anchorEvery}
+		log.Printf("heain-audit: anchoring checkpoints with %s every %s", *tsaURL, *anchorEvery)
+	}
 	srv := app.NewServer()
 	if err := (&api.API{A: a}).Register(srv); err != nil {
 		log.Fatal(err)
@@ -77,3 +88,17 @@ func main() {
 	_ = app.Close(context.Background())
 	log.Printf("heain-audit: deregistered")
 }
+
+// zone is the witness side's view of heain-sdk (Stage B-1d).
+type zone struct{ app *heain.App }
+
+func (z zone) ZoneMaster(ctx context.Context) (string, string, error) {
+	in, err := z.app.Core.Info(ctx)
+	return in.NodeID, in.ZoneMaster, err
+}
+
+func (z zone) DiscoverZone(ctx context.Context, capability string, version int) ([]heain.ZoneInstance, bool, error) {
+	return z.app.DiscoverZone(ctx, capability, version)
+}
+
+func (z zone) Call(ctx context.Context, cs heain.CallSpec) (int, error) { return z.app.Call(ctx, cs) }

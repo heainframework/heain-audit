@@ -37,6 +37,12 @@ func (a *API) Register(s *heain.Server) error {
 		"GET /v1/checkpoints":             a.checkpoints,
 		"GET /v1/checkpoints/{id}/verify": a.verify,
 		"POST /v1/anomaly/scan":           a.scan,
+		"POST /v1/witness/checkpoints":    a.witness,
+		"GET /v1/witness/checkpoints":     a.witnessed,
+		"POST /v1/anchors":                a.anchorNow,
+		"GET /v1/anchors":                 a.anchors,
+		"GET /v1/anchors/{id}/verify":     a.anchorVerify,
+		"GET /v1/anchors/{id}/token":      a.anchorToken,
 	} {
 		if err := s.HandleFunc(p, f); err != nil {
 			return err

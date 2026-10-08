@@ -67,6 +67,9 @@ type Auditor struct {
 	Store *replica.Store
 	P     Params
 	Logf  func(string, ...any)
+	// Zone and Anchoring (Stage B-1d, witness.go): nil = off.
+	Zone      Zone
+	Anchoring *Anchoring
 
 	mu       sync.Mutex // one pull/scan/checkpoint at a time
 	st       Status
@@ -114,6 +117,9 @@ func (a *Auditor) Run(ctx context.Context, every time.Duration) {
 	for {
 		if err := a.Pull(ctx); err != nil && ctx.Err() == nil {
 			a.logf("heain-audit: pull: %v", err)
+		}
+		if ctx.Err() == nil {
+			a.zoneWork(ctx)
 		}
 		select {
 		case <-ctx.Done():

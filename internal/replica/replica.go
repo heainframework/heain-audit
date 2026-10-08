@@ -15,6 +15,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"sort"
 	"time"
 
 	bolt "go.etcd.io/bbolt"
@@ -29,6 +30,10 @@ var (
 	bFlags  = []byte("flags")
 	bAlerts = []byte("alerts")
 	bMeta   = []byte("meta")
+	// Stage B-1d
+	bWitness = []byte("witness") // <node>/<checkpoint id> -> Witnessed
+	bAnchors = []byte("anchors") // <anchor id> -> Anchor
+	bSent    = []byte("sent")    // <checkpoint id> -> the zone Master that holds it
 )
 
 // ErrNotFound: no such record or checkpoint.
@@ -89,7 +94,7 @@ func Open(path string, s *heain.Sealer) (*Store, error) {
 		return nil, fmt.Errorf("replica: open %s: %w", path, err)
 	}
 	if err := db.Update(func(tx *bolt.Tx) error {
-		for _, b := range [][]byte{bChain, bEvents, bCkpt, bFlags, bAlerts, bMeta} {
+		for _, b := range [][]byte{bChain, bEvents, bCkpt, bFlags, bAlerts, bMeta, bWitness, bAnchors, bSent} {
 			if _, err := tx.CreateBucketIfNotExists(b); err != nil {
 				return err
 			}
@@ -336,4 +341,110 @@ func (st *Store) Meta(k string) uint64 {
 		return nil
 	})
 	return n
+}
+
+// ---- Stage B-1d: checkpoints witnessed for other nodes, anchors
+
+// Witnessed (sealed at rest) is a checkpoint another node's heain-audit sent to this one
+// (the heain-audit of its zone Master): roots only, never events.
+type Witnessed struct {
+	Node       string     `json:"node"`
+	Checkpoint Checkpoint `json:"checkpoint"`
+	From       string     `json:"from"` // the sending instance
+	ReceivedAt time.Time  `json:"received_at"`
+}
+
+// PutWitnessed stores a received checkpoint.
+func (st *Store) PutWitnessed(w Witnessed) error {
+	return st.putJSON(bWitness, w.Node+"/"+w.Checkpoint.ID, w, true)
+}
+
+// WitnessedFor lists what node sent (every node when node is ""), oldest first.
+func (st *Store) WitnessedFor(node string) ([]Witnessed, error) {
+	out := []Witnessed{}
+	err := st.list(bWitness, true, func(v []byte) error {
+		var w Witnessed
+		if err := json.Unmarshal(v, &w); err != nil {
+			return err
+		}
+		if node == "" || w.Node == node {
+			out = append(out, w)
+		}
+		return nil
+	})
+	sort.SliceStable(out, func(i, j int) bool {
+		if out[i].Node != out[j].Node {
+			return out[i].Node < out[j].Node
+		}
+		return out[i].Checkpoint.From < out[j].Checkpoint.From
+	})
+	return out, err
+}
+
+// MarkSent records that checkpoint id is held by the zone Master master.
+func (st *Store) MarkSent(id, master string) error {
+	return st.db.Update(func(tx *bolt.Tx) error { return tx.Bucket(bSent).Put([]byte(id), []byte(master)) })
+}
+
+// SentTo returns where checkpoint id was sent ("" = not yet).
+func (st *Store) SentTo(id string) string {
+	var m string
+	_ = st.db.View(func(tx *bolt.Tx) error {
+		m = string(tx.Bucket(bSent).Get([]byte(id)))
+		return nil
+	})
+	return m
+}
+
+// Leaf is one checkpoint covered by an anchor.
+type Leaf struct {
+	Node       string `json:"node"`
+	Checkpoint string `json:"checkpoint"`
+	Digest     string `json:"digest"` // hex SHA-256 the checkpoint's signature covers
+}
+
+// Anchor is a Merkle root over checkpoint digests, stamped by a TSA (RFC 3161).
+type Anchor struct {
+	ID       string    `json:"id"`
+	Root     string    `json:"root"`
+	Leaves   []Leaf    `json:"leaves"`
+	TSA      string    `json:"tsa"`
+	Token    []byte    `json:"token_b64"`
+	GenTime  time.Time `json:"gen_time"`
+	Serial   string    `json:"serial"`
+	Recorded time.Time `json:"recorded"`
+}
+
+// PutAnchor stores an anchor.
+func (st *Store) PutAnchor(a Anchor) error { return st.putJSON(bAnchors, a.ID, a, true) }
+
+// Anchors lists every anchor, oldest first.
+func (st *Store) Anchors() ([]Anchor, error) {
+	out := []Anchor{}
+	err := st.list(bAnchors, true, func(v []byte) error {
+		var a Anchor
+		if err := json.Unmarshal(v, &a); err != nil {
+			return err
+		}
+		out = append(out, a)
+		return nil
+	})
+	return out, err
+}
+
+// Anchor reads one anchor.
+func (st *Store) Anchor(id string) (Anchor, error) {
+	var a Anchor
+	err := st.db.View(func(tx *bolt.Tx) error {
+		v := tx.Bucket(bAnchors).Get([]byte(id))
+		if v == nil {
+			return ErrNotFound
+		}
+		p, err := st.s.Open(v, []byte(string(bAnchors)+"/"+id))
+		if err != nil {
+			return err
+		}
+		return json.Unmarshal(p, &a)
+	})
+	return a, err
 }

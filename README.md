@@ -32,3 +32,16 @@ Any way you like — a plain process, a service unit, a container — configured
 Tests: `go test ./...`; live `bash scripts/live_4c.sh` (needs `~/heain-core`, `~/heain-sdk`); conformance `heain-conformance run --app .`.
 
 **Not yet:** anchoring checkpoint roots outside the deployment (a notary or public ledger); reading the chains of other nodes (one heain-audit per node today); a sequence model for anomalies once real audit history exists.
+
+## Stage B-1d: checkpoints witnessed by the zone Master, anchored with RFC 3161 (2.1, 2026-10-08)
+
+The author decided (2026-10-08) that each node's heain-audit sends its signed checkpoint roots (never the events) to the heain-audit of its Master, and that roots are anchored with a standard Time-Stamp Authority (RFC 3161), verifiable offline. This closes "anchoring checkpoint roots outside the deployment" and, inside a zone, "reading the chains of other nodes" in "Not yet" above.
+
+- **Witness.** After each checkpoint, heain-audit asks core who its zone Master is (`zone_master`) and sends the checkpoint to the heain-audit there (`POST /v1/witness/checkpoints`, capability `audit.witness`, found with zone discovery). The receiver keeps it only if it comes from a heain-audit and is signed, for that node, with the certificate the sender connected with. A checkpoint cut off from its Master waits and is sent when the Master is back. Read them with `GET /v1/witness/checkpoints?node=`.
+- **Conflict.** A checkpoint over records the same node had already covered with another root means the node's chain was rewritten or wiped, or its auditor's replica was reset: the Master's heain-audit raises an alert and P5 `audit.divergence` for an Approver. A node can no longer hide a rewrite from its Master once it has reported a root.
+- **Anchors.** With `-tsa-url` (and `-tsa-ca` to check the TSA's signature), heain-audit stamps every `-anchor-every` (10 min) one Merkle root over every checkpoint it holds that no anchor covers yet -- its own and the witnessed ones. Only that SHA-256 root is sent to the TSA. `GET /v1/anchors`, `GET /v1/anchors/{id}/verify` (leaves, root, token, TSA signature, every leaf's checkpoint signature), `GET /v1/anchors/{id}/token` (the token as the TSA sent it). Offline: `openssl ts -verify -digest <root> -token_in -in <id>.tsr -CAfile <tsa-ca.pem>`.
+- **Where to anchor.** Give `-tsa-url` to the heain-audit on the zone Master; it then anchors the whole zone. Any RFC 3161 TSA works (a public one, or one the organisation runs). `tools/test-tsa` is a TEST ONLY authority (openssl ts with a throwaway CA) for the live test.
+- **Stored sealed.** Witnessed checkpoints and anchors are sealed at rest (data class `checkpoint_root`, zone-local).
+- **Not yet:** checkpoints do not go past the zone Master to the tier above (the Master's own checkpoints and anchors cover its zone).
+
+Tests: `scripts/live_b1d.sh` (Master + farm Worker, a TEST ONLY TSA).
